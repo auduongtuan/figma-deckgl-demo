@@ -2,6 +2,7 @@ import React, { useState, useCallback, useMemo, useRef } from 'react'
 import DeckGL from '@deck.gl/react'
 import { ScatterplotLayer, PolygonLayer } from '@deck.gl/layers'
 import type { ViewStateChangeParameters } from '@deck.gl/core'
+import { getDirectionalRotateCursor } from '../utils/cursor'
 import './ResizableLayerDemo.css'
 
 export interface LayerObject {
@@ -199,7 +200,7 @@ export const ResizableLayerDemo: React.FC = () => {
       const dy = mouseScreen.y - corner.y
       const distance = Math.sqrt(dx * dx + dy * dy)
       if (distance <= 12) {
-        return { type: 'resize', handle: corner.name }
+        return { type: 'resize', handle: corner.name, zoneType: 'resize' }
       }
     }
 
@@ -207,7 +208,7 @@ export const ResizableLayerDemo: React.FC = () => {
     for (const edge of edges) {
       const distance = distanceToLineSegment(mouseScreen.x, mouseScreen.y, edge.x1, edge.y1, edge.x2, edge.y2)
       if (distance <= 12) {
-        return { type: 'resize', handle: edge.name }
+        return { type: 'resize', handle: edge.name, zoneType: 'resize' }
       }
     }
 
@@ -217,7 +218,7 @@ export const ResizableLayerDemo: React.FC = () => {
       const dy = mouseScreen.y - corner.y
       const distance = Math.sqrt(dx * dx + dy * dy)
       if (distance > 12 && distance <= 24) {
-        return { type: 'rotate', handle: 'rotate' }
+        return { type: 'rotate', handle: corner.name, zoneType: 'rotate' } // Return specific corner name for directional cursors
       }
     }
 
@@ -270,7 +271,7 @@ export const ResizableLayerDemo: React.FC = () => {
               startX: coordinate[0],
               startY: coordinate[1],
               type: 'rotate',
-              handle: 'rotate',
+              handle: zone.handle, // Use the specific corner handle (nw, ne, se, sw)
               startRotation: layer.rotation
             })
             return
@@ -447,7 +448,7 @@ export const ResizableLayerDemo: React.FC = () => {
         if (layer.selected) {
           const zone = getHoverZone(layer, worldX, worldY)
           if (zone) {
-            newHoveredHandle = { layerId: layer.id, handleType: zone.handle }
+            newHoveredHandle = { layerId: layer.id, handleType: zone.handle, zoneType: zone.zoneType }
             break
           }
         }
@@ -458,7 +459,11 @@ export const ResizableLayerDemo: React.FC = () => {
     const current = hoveredHandleRef.current
     const isDifferent = !current && newHoveredHandle 
       || current && !newHoveredHandle
-      || (current && newHoveredHandle && (current.layerId !== newHoveredHandle.layerId || current.handleType !== newHoveredHandle.handleType))
+      || (current && newHoveredHandle && (
+        current.layerId !== newHoveredHandle.layerId || 
+        current.handleType !== newHoveredHandle.handleType ||
+        (current as any).zoneType !== (newHoveredHandle as any).zoneType
+      ))
     
     if (isDifferent) {
       hoveredHandleRef.current = newHoveredHandle
@@ -481,7 +486,14 @@ export const ResizableLayerDemo: React.FC = () => {
         if (handle === 'n' || handle === 's') return 'ns-resize'
         if (handle === 'e' || handle === 'w') return 'ew-resize'
       }
-      if (dragging.type === 'rotate') return 'grabbing'
+      if (dragging.type === 'rotate' && dragging.handle) {
+        // Use directional rotate cursor during drag
+        const handle = dragging.handle
+        if (handle === 'nw' || handle === 'ne' || handle === 'se' || handle === 'sw') {
+          return getDirectionalRotateCursor(handle)
+        }
+        return 'grabbing'
+      }
       if (dragging.type === 'move') return 'grabbing'
       return 'grab'
     }
@@ -489,13 +501,27 @@ export const ResizableLayerDemo: React.FC = () => {
     // Only show cursor hints when hovering over a selected layer
     if (hoveredHandle && layers.some(layer => layer.selected)) {
       const handle = hoveredHandle.handleType
+      
+      // Check if we have zoneType information to determine cursor type
+      if ('zoneType' in hoveredHandle) {
+        const zoneType = (hoveredHandle as any).zoneType
+        
+        if (zoneType === 'rotate' && (handle === 'nw' || handle === 'ne' || handle === 'se' || handle === 'sw')) {
+          // Use directional rotate cursor for corner rotate zones
+          return getDirectionalRotateCursor(handle)
+        } else if (zoneType === 'resize') {
+          // Use standard resize cursors for resize zones
+          if (handle === 'nw') return 'nw-resize'
+          if (handle === 'ne') return 'ne-resize'
+          if (handle === 'se') return 'se-resize'
+          if (handle === 'sw') return 'sw-resize'
+          if (handle === 'n' || handle === 's') return 'ns-resize'
+          if (handle === 'e' || handle === 'w') return 'ew-resize'
+        }
+      }
+      
+      // Fallback for any other cases
       if (handle === 'rotate') return 'crosshair'
-      if (handle === 'nw') return 'nw-resize'
-      if (handle === 'ne') return 'ne-resize'
-      if (handle === 'se') return 'se-resize'
-      if (handle === 'sw') return 'sw-resize'
-      if (handle === 'n' || handle === 's') return 'ns-resize'
-      if (handle === 'e' || handle === 'w') return 'ew-resize'
     }
     
     return 'grab'
@@ -513,7 +539,7 @@ export const ResizableLayerDemo: React.FC = () => {
 
   // Create resize zone (12px buffer) for selected layers
   const resizeZoneData = useMemo(() => {
-    if (!canvasRef || !showDebugZones) return []
+    if (!canvasRef) return []
     
     const data: any[] = []
     
@@ -565,7 +591,7 @@ export const ResizableLayerDemo: React.FC = () => {
 
   // Create rotate zone (24px buffer) for selected layers  
   const rotateZoneData = useMemo(() => {
-    if (!canvasRef || !showDebugZones) return []
+    if (!canvasRef) return []
     
     const data: any[] = []
     
@@ -711,9 +737,9 @@ export const ResizableLayerDemo: React.FC = () => {
     id: 'resize-zones',
     data: resizeZoneData,
     getPolygon: (d: any) => d.polygon,
-    getFillColor: [0, 255, 0, 30], // Semi-transparent green for resize zones
-    getLineColor: [0, 255, 0, 80], // Green border for resize zones
-    getLineWidth: 1,
+    getFillColor: showDebugZones ? [0, 255, 0, 30] : [0, 0, 0, 0], // Green when debug, transparent when not
+    getLineColor: showDebugZones ? [0, 255, 0, 80] : [0, 0, 0, 0], // Green border when debug, transparent when not
+    getLineWidth: showDebugZones ? 1 : 0,
     pickable: true,
     onDragStart: handleDragStart,
     onDrag: handleDrag,
@@ -724,9 +750,9 @@ export const ResizableLayerDemo: React.FC = () => {
     id: 'rotate-zones',
     data: rotateZoneData,
     getPolygon: (d: any) => d.polygon,
-    getFillColor: [0, 0, 255, 20], // Semi-transparent blue for rotate zones
-    getLineColor: [0, 0, 255, 60], // Blue border for rotate zones
-    getLineWidth: 1,
+    getFillColor: showDebugZones ? [0, 0, 255, 20] : [0, 0, 0, 0], // Blue when debug, transparent when not
+    getLineColor: showDebugZones ? [0, 0, 255, 60] : [0, 0, 0, 0], // Blue border when debug, transparent when not
+    getLineWidth: showDebugZones ? 1 : 0,
     pickable: true,
     onDragStart: handleDragStart,
     onDrag: handleDrag,
@@ -769,12 +795,7 @@ export const ResizableLayerDemo: React.FC = () => {
             touchRotate: false,
             keyboard: false
           }}
-          layers={[
-            polygonLayer, 
-            ...(showDebugZones ? [rotateZoneLayer, resizeZoneLayer] : []), 
-            borderLayer, 
-            handleLayer
-          ]}
+          layers={[polygonLayer, rotateZoneLayer, resizeZoneLayer, borderLayer, handleLayer]}
           onViewStateChange={handleViewStateChange}
           onHover={handleHover}
           getCursor={getCursor}
