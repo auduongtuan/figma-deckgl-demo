@@ -2,28 +2,30 @@ import React, { useState, useCallback, useMemo, useRef } from "react";
 import DeckGL from "@deck.gl/react";
 import { ScatterplotLayer, PolygonLayer } from "@deck.gl/layers";
 import type { ViewStateChangeParameters } from "@deck.gl/core";
-import { getDirectionalRotateCursor } from "../utils/cursor";
+import type { 
+  LayerObject, 
+  DraggingState, 
+  HoveredHandle, 
+  DeckGLPickingInfo,
+  PolygonData,
+  ZoneData,
+  BorderData,
+  HandleData
+} from "../types/layer";
+import type { ViewState } from "../utils/coordinates";
+import { isPointInsideLayer } from "../utils/coordinates";
+import { getHoverZone } from "../utils/hoverDetection";
+import { getCursor } from "../utils/cursorUtils";
+import { 
+  generatePolygonData, 
+  generateResizeZoneData, 
+  generateRotateZoneData, 
+  generateBorderData, 
+  generateHandleData 
+} from "../utils/dataGeneration";
 import "./ResizableLayerDemo.css";
 
-export interface LayerObject {
-  id: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  color: [number, number, number];
-  selected: boolean;
-  zIndex: number;
-  rotation: number;
-}
-
-interface ResizeHandle {
-  type: "nw" | "ne" | "sw" | "se" | "n" | "e" | "s" | "w";
-  x: number;
-  y: number;
-}
-
-const INITIAL_VIEW_STATE = {
+const INITIAL_VIEW_STATE: ViewState = {
   longitude: 0,
   latitude: 0,
   zoom: 8,
@@ -33,7 +35,7 @@ const INITIAL_VIEW_STATE = {
 
 export const ResizableLayerDemo: React.FC = () => {
   const [showDebugZones, setShowDebugZones] = useState<boolean>(true);
-  const [viewState, setViewState] = useState(INITIAL_VIEW_STATE);
+  const [viewState, setViewState] = useState<ViewState>(INITIAL_VIEW_STATE);
   const [layers, setLayers] = useState<LayerObject[]>([
     {
       id: "1",
@@ -69,53 +71,14 @@ export const ResizableLayerDemo: React.FC = () => {
       rotation: 0,
     },
   ]);
-  const [dragging, setDragging] = useState<{
-    layerId: string;
-    startX: number;
-    startY: number;
-    type: "move" | "resize" | "rotate";
-    handle?: string;
-    startRotation?: number;
-    originalAspectRatio?: number;
-    originalBounds?: {
-      x: number;
-      y: number;
-      width: number;
-      height: number;
-    };
-  } | null>(null);
+  const [dragging, setDragging] = useState<DraggingState | null>(null);
   const [keyPressed, setKeyPressed] = useState<{ shift: boolean }>({
     shift: false,
   });
-  const [hoveredHandle, setHoveredHandle] = useState<{
-    layerId: string;
-    handleType: string;
-  } | null>(null);
-  const hoveredHandleRef = useRef<{
-    layerId: string;
-    handleType: string;
-  } | null>(null);
+  const [hoveredHandle, setHoveredHandle] = useState<HoveredHandle | null>(null);
+  const hoveredHandleRef = useRef<HoveredHandle | null>(null);
   const [canvasRef, setCanvasRef] = useState<HTMLDivElement | null>(null);
   const [isHoveringInsideLayer, setIsHoveringInsideLayer] = useState<boolean>(false);
-
-  // Convert world coordinates to screen coordinates
-  const worldToScreen = useCallback(
-    (worldPos: [number, number]) => {
-      if (!canvasRef) return null;
-
-      const rect = canvasRef.getBoundingClientRect();
-      const centerX = rect.width / 2;
-      const centerY = rect.height / 2;
-
-      // Simple linear projection that matches DeckGL at zoom level 8
-      const scale = Math.pow(2, viewState.zoom - 8) * 400;
-      const x = centerX + (worldPos[0] - viewState.longitude) * scale;
-      const y = centerY - (worldPos[1] - viewState.latitude) * scale;
-
-      return { x, y };
-    },
-    [canvasRef, viewState]
-  );
 
   // Keyboard event listeners
   React.useEffect(() => {
@@ -140,189 +103,8 @@ export const ResizableLayerDemo: React.FC = () => {
     };
   }, []);
 
-  // Check if a point is inside a rotated rectangle
-  const isPointInsideLayer = useCallback(
-    (layer: LayerObject, worldX: number, worldY: number) => {
-      const centerX = layer.x + layer.width / 2;
-      const centerY = layer.y + layer.height / 2;
-      const rad = -(layer.rotation * Math.PI) / 180; // Negative for inverse rotation
-
-      // Rotate the point back to local coordinates
-      const dx = worldX - centerX;
-      const dy = worldY - centerY;
-      const localX = dx * Math.cos(rad) - dy * Math.sin(rad) + centerX;
-      const localY = dx * Math.sin(rad) + dy * Math.cos(rad) + centerY;
-
-      // Check if point is inside the unrotated rectangle
-      return (
-        localX >= layer.x &&
-        localX <= layer.x + layer.width &&
-        localY >= layer.y &&
-        localY <= layer.y + layer.height
-      );
-    },
-    []
-  );
-
-  const getRotatedPolygon = useCallback((layer: LayerObject) => {
-    const centerX = layer.x + layer.width / 2;
-    const centerY = layer.y + layer.height / 2;
-    const rad = (layer.rotation * Math.PI) / 180;
-
-    const corners = [
-      [layer.x, layer.y],
-      [layer.x + layer.width, layer.y],
-      [layer.x + layer.width, layer.y + layer.height],
-      [layer.x, layer.y + layer.height],
-    ];
-
-    return corners.map(([x, y]) => {
-      const dx = x - centerX;
-      const dy = y - centerY;
-      const rotatedX = dx * Math.cos(rad) - dy * Math.sin(rad) + centerX;
-      const rotatedY = dx * Math.sin(rad) + dy * Math.cos(rad) + centerY;
-      return [rotatedX, rotatedY];
-    });
-  }, []);
-
-  // Detect hover zone based on pixel distance from layer edges
-  const getHoverZone = useCallback(
-    (layer: LayerObject, worldX: number, worldY: number) => {
-      if (!layer.selected) return null;
-
-      // Get layer corners in world coordinates
-      const corners = getRotatedPolygon(layer);
-      const screenCorners = corners
-        .map(([x, y]) => worldToScreen([x, y]))
-        .filter(Boolean) as Array<{ x: number; y: number }>;
-
-      if (screenCorners.length !== 4) return null;
-
-      // Get mouse position in screen coordinates
-      const mouseScreen = worldToScreen([worldX, worldY]);
-      if (!mouseScreen) return null;
-
-      // Check distance to each edge and corner
-      const [topLeft, topRight, bottomRight, bottomLeft] = screenCorners;
-
-      // Helper function to get distance from point to line segment
-      const distanceToLineSegment = (
-        px: number,
-        py: number,
-        x1: number,
-        y1: number,
-        x2: number,
-        y2: number
-      ) => {
-        const A = px - x1;
-        const B = py - y1;
-        const C = x2 - x1;
-        const D = y2 - y1;
-
-        const dot = A * C + B * D;
-        const lenSq = C * C + D * D;
-        let param = -1;
-        if (lenSq !== 0) param = dot / lenSq;
-
-        let xx, yy;
-        if (param < 0) {
-          xx = x1;
-          yy = y1;
-        } else if (param > 1) {
-          xx = x2;
-          yy = y2;
-        } else {
-          xx = x1 + param * C;
-          yy = y1 + param * D;
-        }
-
-        const dx = px - xx;
-        const dy = py - yy;
-        return Math.sqrt(dx * dx + dy * dy);
-      };
-
-      // Check distance to each edge
-      const edges = [
-        {
-          name: "n",
-          x1: topLeft.x,
-          y1: topLeft.y,
-          x2: topRight.x,
-          y2: topRight.y,
-        }, // Visual top edge (topLeft to topRight)
-        {
-          name: "e",
-          x1: topRight.x,
-          y1: topRight.y,
-          x2: bottomRight.x,
-          y2: bottomRight.y,
-        }, // Visual right edge
-        {
-          name: "s",
-          x1: bottomRight.x,
-          y1: bottomRight.y,
-          x2: bottomLeft.x,
-          y2: bottomLeft.y,
-        }, // Visual bottom edge (bottomRight to bottomLeft)
-        {
-          name: "w",
-          x1: bottomLeft.x,
-          y1: bottomLeft.y,
-          x2: topLeft.x,
-          y2: topLeft.y,
-        }, // Visual left edge
-      ];
-
-      // Check corners first for corner resize zones (±6px from corners)
-      // Correct mapping: topLeft=nw, topRight=ne, bottomRight=se, bottomLeft=sw
-      const corners_screen = [
-        { name: "nw", x: topLeft.x, y: topLeft.y }, // Top-left = northwest
-        { name: "ne", x: topRight.x, y: topRight.y }, // Top-right = northeast
-        { name: "se", x: bottomRight.x, y: bottomRight.y }, // Bottom-right = southeast
-        { name: "sw", x: bottomLeft.x, y: bottomLeft.y }, // Bottom-left = southwest
-      ];
-
-      for (const corner of corners_screen) {
-        const dx = mouseScreen.x - corner.x;
-        const dy = mouseScreen.y - corner.y;
-        const distance = Math.sqrt(dx * dx + dy * dy);
-        if (distance <= 12) {
-          return { type: "resize", handle: corner.name, zoneType: "resize" };
-        }
-      }
-
-      // Check edges for resize zones (±12px)
-      for (const edge of edges) {
-        const distance = distanceToLineSegment(
-          mouseScreen.x,
-          mouseScreen.y,
-          edge.x1,
-          edge.y1,
-          edge.x2,
-          edge.y2
-        );
-        if (distance <= 12) {
-          return { type: "resize", handle: edge.name, zoneType: "resize" };
-        }
-      }
-
-      // Check corners for rotate zones (12-24px from corners, outside resize zone)
-      for (const corner of corners_screen) {
-        const dx = mouseScreen.x - corner.x;
-        const dy = mouseScreen.y - corner.y;
-        const distance = Math.sqrt(dx * dx + dy * dy);
-        if (distance > 12 && distance <= 24) {
-          return { type: "rotate", handle: corner.name, zoneType: "rotate" }; // Return specific corner name for directional cursors
-        }
-      }
-
-      return null;
-    },
-    [getRotatedPolygon, worldToScreen]
-  );
-
   const handleClick = useCallback(
-    (info: any) => {
+    (info: DeckGLPickingInfo) => {
       if (!info.object) {
         // Clicked on empty area, deselect all
         setLayers((prev) =>
@@ -332,7 +114,7 @@ export const ResizableLayerDemo: React.FC = () => {
       }
 
       const clickedLayer = layers.find(
-        (layer) => layer.id === info.object.layerId
+        (layer) => layer.id === info.object?.layerId
       );
       if (!clickedLayer) return;
 
@@ -350,16 +132,16 @@ export const ResizableLayerDemo: React.FC = () => {
   );
 
   const handleDragStart = useCallback(
-    (info: any) => {
+    (info: DeckGLPickingInfo) => {
       if (!info.coordinate) return;
 
       const coordinate = info.coordinate;
-      const [worldX, worldY] = coordinate;
+      const [worldX, worldY] = coordinate as [number, number];
 
       // Always check for hover zones first, regardless of what was clicked
       for (const layer of layers) {
         if (layer.selected) {
-          const zone = getHoverZone(layer, worldX, worldY);
+          const zone = getHoverZone(layer, worldX, worldY, viewState, canvasRef);
           if (zone) {
             if (zone.type === "resize") {
               setDragging({
@@ -383,7 +165,7 @@ export const ResizableLayerDemo: React.FC = () => {
                 startX: coordinate[0],
                 startY: coordinate[1],
                 type: "rotate",
-                handle: zone.handle, // Use the specific corner handle (nw, ne, se, sw)
+                handle: zone.handle,
                 startRotation: layer.rotation,
               });
               return;
@@ -395,7 +177,7 @@ export const ResizableLayerDemo: React.FC = () => {
       // If no hover zone detected, check for regular layer clicks
       if (info.object) {
         const clickedLayer = layers.find(
-          (layer) => layer.id === info.object.layerId
+          (layer) => layer.id === info.object?.layerId
         );
         if (clickedLayer) {
           const isInside = isPointInsideLayer(clickedLayer, worldX, worldY);
@@ -411,14 +193,14 @@ export const ResizableLayerDemo: React.FC = () => {
         }
       }
     },
-    [layers, getHoverZone, isPointInsideLayer]
+    [layers, viewState, canvasRef]
   );
 
   const handleDrag = useCallback(
-    (info: any) => {
+    (info: DeckGLPickingInfo) => {
       if (!dragging || !info.coordinate) return;
 
-      const [currentX, currentY] = info.coordinate;
+      const [currentX, currentY] = info.coordinate as [number, number];
       const deltaX = currentX - dragging.startX;
       const deltaY = currentY - dragging.startY;
 
@@ -477,44 +259,18 @@ export const ResizableLayerDemo: React.FC = () => {
             // Use the original bounds stored when drag started
             if (!dragging.originalBounds) return layer;
 
-            // Calculate new bounds based on cursor position
-            // Start with ORIGINAL bounds from drag start
             const orig = dragging.originalBounds;
-
-            // console.log("ORIGINAL BOUNDS:", orig);
-            let newLeft = orig.x;
-            let newTop = orig.y;
-            let newRight = orig.x + orig.width;
-            let newBottom = orig.y + orig.height;
-
-            // console.log({ newLeft, newTop, newRight, newBottom });
-
-            // Update ONLY the edge being dragged, keep opposite edge fixed
-            if (handle.includes("w")) {
-              newLeft = currentX; // Move left edge, keep right edge fixed
-            }
-            if (handle.includes("e")) {
-              newRight = currentX; // Move right edge, keep left edge fixed
-            }
-            if (handle.includes("n")) {
-              newTop = currentY; // Move top edge, keep bottom edge fixed
-            }
-            if (handle.includes("s")) {
-              newBottom = currentY; // Move bottom edge, keep top edge fixed
-            }
-
-            // Calculate new dimensions and position based on handle type
+            
+            // Calculate new dimensions based on handle type
             if (handle === "s") {
               // Pure south (bottom) resize - bottom edge follows cursor, top edge stays fixed
-              newLayer.y = orig.y; // Top edge stays at original position
-              newLayer.height = Math.abs(currentY - orig.y); // Height from top to cursor position
+              newLayer.y = orig.y;
+              newLayer.height = Math.abs(currentY - orig.y);
             } else if (handle === "n") {
               // Pure north (top) resize - top edge follows cursor, bottom edge stays fixed
               const originalBottom = orig.y + orig.height;
-
-              // Top edge moves to cursor position, bottom edge stays fixed
-              newLayer.y = currentY; // Top edge follows cursor
-              newLayer.height = Math.abs(originalBottom - currentY); // Distance from cursor to fixed bottom
+              newLayer.y = currentY;
+              newLayer.height = Math.abs(originalBottom - currentY);
             } else if (handle === "w") {
               // Pure west (left) resize - keep original right fixed
               const originalRight = orig.x + orig.width;
@@ -525,24 +281,17 @@ export const ResizableLayerDemo: React.FC = () => {
               newLayer.x = orig.x;
               newLayer.width = Math.abs(currentX - orig.x);
             } else {
-              // Corner handles - keep opposite edges fixed, move the corner edges
-
+              // Corner handles
               if (handle.includes("n")) {
                 // North corners - top edge moves, bottom edge stays fixed
-                newLayer.y = currentY; // Top edge follows cursor
-                newLayer.height = Math.abs(orig.y + orig.height - currentY); // Distance from cursor to fixed bottom
+                newLayer.y = currentY;
+                newLayer.height = Math.abs((orig.y + orig.height) - currentY);
               } else if (handle.includes("s")) {
                 // South corners - bottom edge follows cursor, top edge stays fixed
-                // In inverted Y coordinate system: negative Y is DOWN, positive Y is UP
-                // When dragging south (visually down), currentY becomes MORE NEGATIVE
-                // Top edge always stays at original position
                 newLayer.y = orig.y;
-                // Height should reach from fixed top to cursor position
-                // Since Y-axis is inverted, when dragging down (south), currentY becomes more negative
-                // Height = distance from top to cursor = |currentY - orig.y|
                 newLayer.height = Math.abs(currentY - orig.y);
               }
-
+              
               if (handle.includes("w")) {
                 // West corners - left edge moves, right edge stays fixed
                 const originalRight = orig.x + orig.width;
@@ -550,92 +299,25 @@ export const ResizableLayerDemo: React.FC = () => {
                 newLayer.x = Math.min(currentX, originalRight);
               } else if (handle.includes("e")) {
                 // East corners - right edge moves, left edge stays fixed
-                newLayer.x = orig.x; // Left edge stays at original position
-                newLayer.width = Math.abs(currentX - orig.x); // Width from left to cursor position
+                newLayer.x = orig.x;
+                newLayer.width = Math.abs(currentX - orig.x);
               }
             }
 
             // Maintain aspect ratio when shift is pressed
             if (keyPressed.shift && dragging.originalAspectRatio) {
               const aspectRatio = dragging.originalAspectRatio;
-
-              // For corner handles, use the dominant dimension change
-              if (handle.includes("w") && handle.includes("n")) {
-                const widthChange = Math.abs(
-                  currentX - (layer.x + layer.width)
-                );
-                const heightChange = Math.abs(
-                  currentY - (layer.y + layer.height)
-                );
-                if (widthChange > heightChange) {
-                  newLayer.height = newLayer.width / aspectRatio;
-                  newLayer.y = layer.y + layer.height - newLayer.height;
-                } else {
-                  newLayer.width = newLayer.height * aspectRatio;
-                  newLayer.x = layer.x + layer.width - newLayer.width;
-                }
-              } else if (handle.includes("e") && handle.includes("n")) {
-                const widthChange = Math.abs(currentX - layer.x);
-                const heightChange = Math.abs(
-                  currentY - (layer.y + layer.height)
-                );
-                if (widthChange > heightChange) {
-                  newLayer.height = newLayer.width / aspectRatio;
-                  newLayer.y = layer.y + layer.height - newLayer.height;
-                } else {
-                  newLayer.width = newLayer.height * aspectRatio;
-                }
-              } else if (handle.includes("w") && handle.includes("s")) {
-                const widthChange = Math.abs(
-                  currentX - (layer.x + layer.width)
-                );
-                const heightChange = Math.abs(currentY - layer.y);
-                if (widthChange > heightChange) {
-                  newLayer.height = newLayer.width / aspectRatio;
-                } else {
-                  newLayer.width = newLayer.height * aspectRatio;
-                  newLayer.x = layer.x + layer.width - newLayer.width;
-                }
-              } else if (handle.includes("e") && handle.includes("s")) {
-                const widthChange = Math.abs(currentX - layer.x);
-                const heightChange = Math.abs(currentY - layer.y);
-                if (widthChange > heightChange) {
-                  newLayer.height = newLayer.width / aspectRatio;
-                } else {
-                  newLayer.width = newLayer.height * aspectRatio;
-                }
-              } else if (handle.includes("w") || handle.includes("e")) {
-                // Width handles - maintain aspect ratio by adjusting height from center
+              // Simplified aspect ratio maintenance for corner handles
+              if (handle.includes("w") || handle.includes("e")) {
                 newLayer.height = newLayer.width / aspectRatio;
-                const heightDiff = newLayer.height - layer.height;
-                newLayer.y = layer.y - heightDiff / 2;
               } else if (handle.includes("n") || handle.includes("s")) {
-                // Height handles - maintain aspect ratio by adjusting width from center
                 newLayer.width = newLayer.height * aspectRatio;
-                const widthDiff = newLayer.width - layer.width;
-                newLayer.x = layer.x - widthDiff / 2;
               }
             }
 
             // Prevent negative dimensions and maintain minimum size
-            newLayer.width = Math.max(0.01, Math.abs(newLayer.width)); // Use smaller minimum to avoid interfering with small resizes
-            newLayer.height = Math.max(0.01, newLayer.height); // Use smaller minimum to avoid interfering with small resizes
-
-            // Handle negative width/height by flipping coordinates for corner handles only
-            if (
-              handle.includes("w") &&
-              handle.includes("e") &&
-              newRight < newLeft
-            ) {
-              newLayer.x = newRight;
-            }
-            if (
-              handle.includes("n") &&
-              handle.includes("s") &&
-              newBottom < newTop
-            ) {
-              newLayer.y = newBottom;
-            }
+            newLayer.width = Math.max(0.01, Math.abs(newLayer.width));
+            newLayer.height = Math.max(0.01, newLayer.height);
 
             return newLayer;
           }
@@ -644,9 +326,9 @@ export const ResizableLayerDemo: React.FC = () => {
         })
       );
 
-      // Don't update startX/startY during drag for rotation or resize - it breaks the calculation!
+      // Don't update startX/startY during drag for rotation or resize
       if (dragging.type === "rotate" || dragging.type === "resize") {
-        return; // Keep original start coordinates for accurate calculation
+        return;
       }
 
       setDragging((prev) =>
@@ -661,17 +343,17 @@ export const ResizableLayerDemo: React.FC = () => {
   }, []);
 
   const handleHover = useCallback(
-    (info: any) => {
-      let newHoveredHandle = null;
+    (info: DeckGLPickingInfo) => {
+      let newHoveredHandle: HoveredHandle | null = null;
       let hoveringInsideLayer = false;
 
       if (info.coordinate) {
-        const [worldX, worldY] = info.coordinate;
+        const [worldX, worldY] = info.coordinate as [number, number];
 
         // Check all selected layers for hover zones and inside detection
         for (const layer of layers) {
           if (layer.selected) {
-            const zone = getHoverZone(layer, worldX, worldY);
+            const zone = getHoverZone(layer, worldX, worldY, viewState, canvasRef);
             if (zone) {
               newHoveredHandle = {
                 layerId: layer.id,
@@ -701,14 +383,14 @@ export const ResizableLayerDemo: React.FC = () => {
           newHoveredHandle &&
           (current.layerId !== newHoveredHandle.layerId ||
             current.handleType !== newHoveredHandle.handleType ||
-            (current as any).zoneType !== (newHoveredHandle as any).zoneType));
+            current.zoneType !== newHoveredHandle.zoneType));
 
       if (isDifferent) {
         hoveredHandleRef.current = newHoveredHandle;
         setHoveredHandle(newHoveredHandle);
       }
     },
-    [layers, getHoverZone, isPointInsideLayer]
+    [layers, viewState, canvasRef]
   );
 
   const handleViewStateChange = useCallback(
@@ -718,287 +400,31 @@ export const ResizableLayerDemo: React.FC = () => {
     []
   );
 
-  const getCursor = useCallback(() => {
-    if (dragging) {
-      if (dragging.type === "resize" && dragging.handle) {
-        const handle = dragging.handle;
-        if (handle === "nw" || handle == "se") return "nesw-resize"; // Top-left should be nwse-resize
-        if (handle === "ne" || handle == "sw") return "nwse-resize"; // Top-right should be nesw-resize
-        if (handle === "n" || handle === "s") return "ns-resize";
-        if (handle === "e" || handle === "w") return "ew-resize";
-      }
-      if (dragging.type === "rotate" && dragging.handle) {
-        // Use directional rotate cursor during drag
-        const handle = dragging.handle;
-        if (
-          handle === "nw" ||
-          handle === "ne" ||
-          handle === "se" ||
-          handle === "sw"
-        ) {
-          return getDirectionalRotateCursor(handle);
-        }
-        return "grabbing";
-      }
-      if (dragging.type === "move") return "move";
-      return "grab";
-    }
+  const cursorStyle = getCursor(dragging, hoveredHandle, layers, isHoveringInsideLayer);
 
-    // Only show cursor hints when hovering over a selected layer
-    if (hoveredHandle && layers.some((layer) => layer.selected)) {
-      const handle = hoveredHandle.handleType;
+  // Generate data for DeckGL layers
+  const polygonData = useMemo(() => generatePolygonData(layers), [layers]);
+  
+  const resizeZoneData = useMemo(
+    () => generateResizeZoneData(layers, viewState, canvasRef),
+    [layers, canvasRef, viewState]
+  );
 
-      // Check if we have zoneType information to determine cursor type
-      if ("zoneType" in hoveredHandle) {
-        const zoneType = (hoveredHandle as any).zoneType;
+  const rotateZoneData = useMemo(
+    () => generateRotateZoneData(layers, viewState, canvasRef),
+    [layers, canvasRef, viewState]
+  );
 
-        if (
-          zoneType === "rotate" &&
-          (handle === "nw" ||
-            handle === "ne" ||
-            handle === "se" ||
-            handle === "sw")
-        ) {
-          // Use directional rotate cursor for corner rotate zones
-          return getDirectionalRotateCursor(handle);
-        } else if (zoneType === "resize") {
-          // Use standard resize cursors for resize zones
-          if (handle === "nw" || handle == "se") return "nesw-resize"; // Top-left should be nwse-resize
-          if (handle === "ne" || handle == "sw") return "nwse-resize"; // Top-right should be nesw-resize
-          if (handle === "n" || handle === "s") return "ns-resize";
-          if (handle === "e" || handle === "w") return "ew-resize";
-          if (handle === "n" || handle === "s") return "ns-resize";
-          if (handle === "e" || handle === "w") return "ew-resize";
-        }
-      }
+  const borderData = useMemo(() => generateBorderData(layers), [layers]);
 
-      // Fallback for any other cases
-      if (handle === "rotate") return "crosshair";
-    }
+  const handleData = useMemo(() => generateHandleData(layers), [layers]);
 
-    // Check if hovering inside a selected layer (not in resize/rotate zones)
-    // If so, show move cursor
-    if (isHoveringInsideLayer) {
-      return "move";
-    }
-
-    return "grab";
-  }, [dragging, hoveredHandle, layers, isHoveringInsideLayer]);
-
-  // console.log(layers);
-  const polygonData = useMemo(() => {
-    return [...layers]
-      .sort((a, b) => a.zIndex - b.zIndex)
-      .map((layer) => ({
-        polygon: getRotatedPolygon(layer),
-        color: layer.color,
-        layerId: layer.id,
-      }));
-  }, [layers, getRotatedPolygon]);
-
-  // Create resize zone (12px buffer) for selected layers
-  const resizeZoneData = useMemo(() => {
-    if (!canvasRef) return [];
-
-    const data: any[] = [];
-
-    layers.forEach((layer) => {
-      if (layer.selected) {
-        // Calculate 12px buffer in world coordinates
-        const scale = Math.pow(2, viewState.zoom - 8) * 400;
-        const bufferWorld = 12 / scale;
-
-        // Create extended layer dimensions for resize zone
-        const extendedLayer = {
-          x: layer.x - bufferWorld,
-          y: layer.y - bufferWorld,
-          width: layer.width + 2 * bufferWorld,
-          height: layer.height + 2 * bufferWorld,
-          rotation: layer.rotation,
-        };
-
-        // Calculate rotated polygon for extended layer
-        const centerX = extendedLayer.x + extendedLayer.width / 2;
-        const centerY = extendedLayer.y + extendedLayer.height / 2;
-        const rad = (extendedLayer.rotation * Math.PI) / 180;
-
-        const corners = [
-          [extendedLayer.x, extendedLayer.y],
-          [extendedLayer.x + extendedLayer.width, extendedLayer.y],
-          [
-            extendedLayer.x + extendedLayer.width,
-            extendedLayer.y + extendedLayer.height,
-          ],
-          [extendedLayer.x, extendedLayer.y + extendedLayer.height],
-        ];
-
-        const rotatedCorners = corners.map(([x, y]) => {
-          const dx = x - centerX;
-          const dy = y - centerY;
-          const rotatedX = dx * Math.cos(rad) - dy * Math.sin(rad) + centerX;
-          const rotatedY = dx * Math.sin(rad) + dy * Math.cos(rad) + centerY;
-          return [rotatedX, rotatedY];
-        });
-
-        data.push({
-          polygon: rotatedCorners,
-          layerId: layer.id,
-          zoneType: "resize",
-        });
-      }
-    });
-
-    return data;
-  }, [layers, canvasRef, viewState, showDebugZones]);
-
-  // Create rotate zone (24px buffer) for selected layers
-  const rotateZoneData = useMemo(() => {
-    if (!canvasRef) return [];
-
-    const data: any[] = [];
-
-    layers.forEach((layer) => {
-      if (layer.selected) {
-        // Calculate 24px buffer in world coordinates for rotate zone
-        const scale = Math.pow(2, viewState.zoom - 8) * 400;
-        const bufferWorld = 24 / scale;
-
-        // Create extended layer dimensions for rotate zone
-        const extendedLayer = {
-          x: layer.x - bufferWorld,
-          y: layer.y - bufferWorld,
-          width: layer.width + 2 * bufferWorld,
-          height: layer.height + 2 * bufferWorld,
-          rotation: layer.rotation,
-        };
-
-        // Calculate rotated polygon for extended layer
-        const centerX = extendedLayer.x + extendedLayer.width / 2;
-        const centerY = extendedLayer.y + extendedLayer.height / 2;
-        const rad = (extendedLayer.rotation * Math.PI) / 180;
-
-        const corners = [
-          [extendedLayer.x, extendedLayer.y],
-          [extendedLayer.x + extendedLayer.width, extendedLayer.y],
-          [
-            extendedLayer.x + extendedLayer.width,
-            extendedLayer.y + extendedLayer.height,
-          ],
-          [extendedLayer.x, extendedLayer.y + extendedLayer.height],
-        ];
-
-        const rotatedCorners = corners.map(([x, y]) => {
-          const dx = x - centerX;
-          const dy = y - centerY;
-          const rotatedX = dx * Math.cos(rad) - dy * Math.sin(rad) + centerX;
-          const rotatedY = dx * Math.sin(rad) + dy * Math.cos(rad) + centerY;
-          return [rotatedX, rotatedY];
-        });
-
-        data.push({
-          polygon: rotatedCorners,
-          layerId: layer.id,
-          zoneType: "rotate",
-        });
-      }
-    });
-
-    return data;
-  }, [layers, canvasRef, viewState, showDebugZones]);
-
-  const borderData = useMemo(() => {
-    const data: any[] = [];
-
-    layers.forEach((layer) => {
-      if (layer.selected) {
-        // Selection border outline with rotation support
-        const borderWidth = 0.005;
-        const centerX = layer.x + layer.width / 2;
-        const centerY = layer.y + layer.height / 2;
-        const rad = (layer.rotation * Math.PI) / 180;
-
-        const rotatePoint = (x: number, y: number) => {
-          const dx = x - centerX;
-          const dy = y - centerY;
-          const rotatedX = dx * Math.cos(rad) - dy * Math.sin(rad) + centerX;
-          const rotatedY = dx * Math.sin(rad) + dy * Math.cos(rad) + centerY;
-          return [rotatedX, rotatedY];
-        };
-
-        const outerBorder = [
-          rotatePoint(layer.x - borderWidth, layer.y - borderWidth),
-          rotatePoint(
-            layer.x + layer.width + borderWidth,
-            layer.y - borderWidth
-          ),
-          rotatePoint(
-            layer.x + layer.width + borderWidth,
-            layer.y + layer.height + borderWidth
-          ),
-          rotatePoint(
-            layer.x - borderWidth,
-            layer.y + layer.height + borderWidth
-          ),
-        ];
-        const innerBorder = getRotatedPolygon(layer);
-
-        data.push({
-          polygon: [outerBorder, innerBorder],
-          color: [24, 144, 255],
-          layerId: layer.id,
-          type: "border",
-        });
-      }
-    });
-
-    return data;
-  }, [layers, getRotatedPolygon]);
-
-  const handleData = useMemo(() => {
-    const handles: any[] = [];
-
-    layers.forEach((layer) => {
-      if (layer.selected) {
-        const corners = getRotatedPolygon(layer);
-        const [nw, ne, se, sw] = corners;
-
-        // Calculate midpoints of edges
-        const n = [(nw[0] + ne[0]) / 2, (nw[1] + ne[1]) / 2];
-        const e = [(ne[0] + se[0]) / 2, (ne[1] + se[1]) / 2];
-        const s = [(sw[0] + se[0]) / 2, (sw[1] + se[1]) / 2];
-        const w = [(sw[0] + nw[0]) / 2, (sw[1] + nw[1]) / 2];
-
-        const handlePositions = [
-          { position: nw, type: "nw" },
-          { position: n, type: "n" },
-          { position: ne, type: "ne" },
-          { position: e, type: "e" },
-          { position: se, type: "se" },
-          { position: s, type: "s" },
-          { position: sw, type: "sw" },
-          { position: w, type: "w" },
-        ];
-
-        handlePositions.forEach(({ position, type }) => {
-          handles.push({
-            position,
-            handleType: type,
-            layerId: layer.id,
-            size: 8,
-            color: [70, 130, 255], // Blue handles
-          });
-        });
-      }
-    });
-
-    return handles;
-  }, [layers, getRotatedPolygon]);
-
-  const polygonLayer = new PolygonLayer({
+  // Create DeckGL layers
+  const polygonLayer = new PolygonLayer<PolygonData>({
     id: "layer-polygons",
     data: polygonData,
-    getPolygon: (d: any) => d.polygon,
-    getFillColor: (d: any) => [...d.color, 180],
+    getPolygon: (d) => d.polygon,
+    getFillColor: (d) => [...d.color, 180] as [number, number, number, number],
     getLineColor: [0, 0, 0, 0],
     pickable: true,
     onClick: handleClick,
@@ -1007,12 +433,12 @@ export const ResizableLayerDemo: React.FC = () => {
     onDragEnd: handleDragEnd,
   });
 
-  const resizeZoneLayer = new PolygonLayer({
+  const resizeZoneLayer = new PolygonLayer<ZoneData>({
     id: "resize-zones",
     data: resizeZoneData,
-    getPolygon: (d: any) => d.polygon,
-    getFillColor: showDebugZones ? [0, 255, 0, 30] : [0, 0, 0, 0], // Green when debug, transparent when not
-    getLineColor: showDebugZones ? [0, 255, 0, 80] : [0, 0, 0, 0], // Green border when debug, transparent when not
+    getPolygon: (d) => d.polygon,
+    getFillColor: showDebugZones ? [0, 255, 0, 30] : [0, 0, 0, 0],
+    getLineColor: showDebugZones ? [0, 255, 0, 80] : [0, 0, 0, 0],
     getLineWidth: showDebugZones ? 1 : 0,
     pickable: true,
     onDragStart: handleDragStart,
@@ -1020,12 +446,12 @@ export const ResizableLayerDemo: React.FC = () => {
     onDragEnd: handleDragEnd,
   });
 
-  const rotateZoneLayer = new PolygonLayer({
+  const rotateZoneLayer = new PolygonLayer<ZoneData>({
     id: "rotate-zones",
     data: rotateZoneData,
-    getPolygon: (d: any) => d.polygon,
-    getFillColor: showDebugZones ? [0, 0, 255, 20] : [0, 0, 0, 0], // Blue when debug, transparent when not
-    getLineColor: showDebugZones ? [0, 0, 255, 60] : [0, 0, 0, 0], // Blue border when debug, transparent when not
+    getPolygon: (d) => d.polygon,
+    getFillColor: showDebugZones ? [0, 0, 255, 20] : [0, 0, 0, 0],
+    getLineColor: showDebugZones ? [0, 0, 255, 60] : [0, 0, 0, 0],
     getLineWidth: showDebugZones ? 1 : 0,
     pickable: true,
     onDragStart: handleDragStart,
@@ -1033,21 +459,21 @@ export const ResizableLayerDemo: React.FC = () => {
     onDragEnd: handleDragEnd,
   });
 
-  const borderLayer = new PolygonLayer({
+  const borderLayer = new PolygonLayer<BorderData>({
     id: "selection-borders",
     data: borderData,
-    getPolygon: (d: any) => d.polygon,
-    getFillColor: (d: any) => [...d.color, 255],
+    getPolygon: (d) => d.polygon,
+    getFillColor: (d) => [...d.color, 255] as [number, number, number, number],
     getLineColor: [0, 0, 0, 0],
     pickable: false,
   });
 
-  const handleLayer = new ScatterplotLayer({
+  const handleLayer = new ScatterplotLayer<HandleData>({
     id: "resize-handles",
     data: handleData,
-    getPosition: (d: any) => d.position,
-    getRadius: (d: any) => d.size,
-    getFillColor: (d: any) => d.color,
+    getPosition: (d) => d.position,
+    getRadius: (d) => d.size,
+    getFillColor: (d) => d.color,
     getLineColor: [255, 255, 255, 255],
     getLineWidth: 2,
     pickable: false,
@@ -1082,7 +508,7 @@ export const ResizableLayerDemo: React.FC = () => {
           ]}
           onViewStateChange={handleViewStateChange}
           onHover={handleHover}
-          getCursor={getCursor}
+          getCursor={() => cursorStyle}
         />
         {dragging?.type === "rotate" && (
           <div
