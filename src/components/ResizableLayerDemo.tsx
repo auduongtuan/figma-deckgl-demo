@@ -96,6 +96,7 @@ export const ResizableLayerDemo: React.FC = () => {
     handleType: string;
   } | null>(null);
   const [canvasRef, setCanvasRef] = useState<HTMLDivElement | null>(null);
+  const [isHoveringInsideLayer, setIsHoveringInsideLayer] = useState<boolean>(false);
 
   // Convert world coordinates to screen coordinates
   const worldToScreen = useCallback(
@@ -273,12 +274,12 @@ export const ResizableLayerDemo: React.FC = () => {
       ];
 
       // Check corners first for corner resize zones (±6px from corners)
-      // Flipped mapping to match screen coordinates where Y increases downward
+      // Correct mapping: topLeft=nw, topRight=ne, bottomRight=se, bottomLeft=sw
       const corners_screen = [
-        { name: "sw", x: topLeft.x, y: topLeft.y },
-        { name: "se", x: topRight.x, y: topRight.y },
-        { name: "ne", x: bottomRight.x, y: bottomRight.y },
-        { name: "nw", x: bottomLeft.x, y: bottomLeft.y },
+        { name: "nw", x: topLeft.x, y: topLeft.y }, // Top-left = northwest
+        { name: "ne", x: topRight.x, y: topRight.y }, // Top-right = northeast
+        { name: "se", x: bottomRight.x, y: bottomRight.y }, // Bottom-right = southeast
+        { name: "sw", x: bottomLeft.x, y: bottomLeft.y }, // Bottom-left = southwest
       ];
 
       for (const corner of corners_screen) {
@@ -479,6 +480,7 @@ export const ResizableLayerDemo: React.FC = () => {
             // Calculate new bounds based on cursor position
             // Start with ORIGINAL bounds from drag start
             const orig = dragging.originalBounds;
+
             // console.log("ORIGINAL BOUNDS:", orig);
             let newLeft = orig.x;
             let newTop = orig.y;
@@ -502,41 +504,54 @@ export const ResizableLayerDemo: React.FC = () => {
             }
 
             // Calculate new dimensions and position based on handle type
-            if (handle.includes("s") && !handle.includes("n")) {
+            if (handle === "s") {
               // Pure south (bottom) resize - bottom edge follows cursor, top edge stays fixed
               newLayer.y = orig.y; // Top edge stays at original position
               newLayer.height = Math.abs(currentY - orig.y); // Height from top to cursor position
-            } else if (handle.includes("n") && !handle.includes("s")) {
+            } else if (handle === "n") {
               // Pure north (top) resize - top edge follows cursor, bottom edge stays fixed
               const originalBottom = orig.y + orig.height;
-              
+
               // Top edge moves to cursor position, bottom edge stays fixed
               newLayer.y = currentY; // Top edge follows cursor
               newLayer.height = Math.abs(originalBottom - currentY); // Distance from cursor to fixed bottom
-            } else if (handle.includes("w") && !handle.includes("e")) {
+            } else if (handle === "w") {
               // Pure west (left) resize - keep original right fixed
               const originalRight = orig.x + orig.width;
               newLayer.width = Math.abs(originalRight - currentX);
               newLayer.x = Math.min(currentX, originalRight);
-            } else if (handle.includes("e") && !handle.includes("w")) {
+            } else if (handle === "e") {
               // Pure east (right) resize - keep original left fixed
               newLayer.x = orig.x;
               newLayer.width = Math.abs(currentX - orig.x);
             } else {
-              // Corner handles - use original bounds-based calculation
-              newLayer.width = newRight - newLeft;
-              newLayer.height = newBottom - newTop;
-              newLayer.x = newLeft;
-              newLayer.y = newTop;
+              // Corner handles - keep opposite edges fixed, move the corner edges
 
-              // Fix negative dimensions for corner handles
-              if (newLayer.width < 0) {
-                newLayer.x = newRight;
-                newLayer.width = Math.abs(newLayer.width);
+              if (handle.includes("n")) {
+                // North corners - top edge moves, bottom edge stays fixed
+                newLayer.y = currentY; // Top edge follows cursor
+                newLayer.height = Math.abs(orig.y + orig.height - currentY); // Distance from cursor to fixed bottom
+              } else if (handle.includes("s")) {
+                // South corners - bottom edge follows cursor, top edge stays fixed
+                // In inverted Y coordinate system: negative Y is DOWN, positive Y is UP
+                // When dragging south (visually down), currentY becomes MORE NEGATIVE
+                // Top edge always stays at original position
+                newLayer.y = orig.y;
+                // Height should reach from fixed top to cursor position
+                // Since Y-axis is inverted, when dragging down (south), currentY becomes more negative
+                // Height = distance from top to cursor = |currentY - orig.y|
+                newLayer.height = Math.abs(currentY - orig.y);
               }
-              if (newLayer.height < 0) {
-                newLayer.y = newBottom;
-                newLayer.height = Math.abs(newLayer.height);
+
+              if (handle.includes("w")) {
+                // West corners - left edge moves, right edge stays fixed
+                const originalRight = orig.x + orig.width;
+                newLayer.width = Math.abs(originalRight - currentX);
+                newLayer.x = Math.min(currentX, originalRight);
+              } else if (handle.includes("e")) {
+                // East corners - right edge moves, left edge stays fixed
+                newLayer.x = orig.x; // Left edge stays at original position
+                newLayer.width = Math.abs(currentX - orig.x); // Width from left to cursor position
               }
             }
 
@@ -602,7 +617,6 @@ export const ResizableLayerDemo: React.FC = () => {
               }
             }
 
-
             // Prevent negative dimensions and maintain minimum size
             newLayer.width = Math.max(0.01, Math.abs(newLayer.width)); // Use smaller minimum to avoid interfering with small resizes
             newLayer.height = Math.max(0.01, newLayer.height); // Use smaller minimum to avoid interfering with small resizes
@@ -622,7 +636,6 @@ export const ResizableLayerDemo: React.FC = () => {
             ) {
               newLayer.y = newBottom;
             }
-
 
             return newLayer;
           }
@@ -650,11 +663,12 @@ export const ResizableLayerDemo: React.FC = () => {
   const handleHover = useCallback(
     (info: any) => {
       let newHoveredHandle = null;
+      let hoveringInsideLayer = false;
 
       if (info.coordinate) {
         const [worldX, worldY] = info.coordinate;
 
-        // Check all selected layers for hover zones
+        // Check all selected layers for hover zones and inside detection
         for (const layer of layers) {
           if (layer.selected) {
             const zone = getHoverZone(layer, worldX, worldY);
@@ -666,9 +680,17 @@ export const ResizableLayerDemo: React.FC = () => {
               };
               break;
             }
+            
+            // If no hover zone but still inside the layer, set hovering inside layer
+            if (!zone && isPointInsideLayer(layer, worldX, worldY)) {
+              hoveringInsideLayer = true;
+            }
           }
         }
       }
+
+      // Update the hovering inside layer state
+      setIsHoveringInsideLayer(hoveringInsideLayer);
 
       // Only update if different from current
       const current = hoveredHandleRef.current;
@@ -686,7 +708,7 @@ export const ResizableLayerDemo: React.FC = () => {
         setHoveredHandle(newHoveredHandle);
       }
     },
-    [layers, getHoverZone]
+    [layers, getHoverZone, isPointInsideLayer]
   );
 
   const handleViewStateChange = useCallback(
@@ -700,10 +722,8 @@ export const ResizableLayerDemo: React.FC = () => {
     if (dragging) {
       if (dragging.type === "resize" && dragging.handle) {
         const handle = dragging.handle;
-        if (handle === "nw") return "nw-resize";
-        if (handle === "ne") return "ne-resize";
-        if (handle === "se") return "se-resize";
-        if (handle === "sw") return "sw-resize";
+        if (handle === "nw" || handle == "se") return "nesw-resize"; // Top-left should be nwse-resize
+        if (handle === "ne" || handle == "sw") return "nwse-resize"; // Top-right should be nesw-resize
         if (handle === "n" || handle === "s") return "ns-resize";
         if (handle === "e" || handle === "w") return "ew-resize";
       }
@@ -720,7 +740,7 @@ export const ResizableLayerDemo: React.FC = () => {
         }
         return "grabbing";
       }
-      if (dragging.type === "move") return "grabbing";
+      if (dragging.type === "move") return "move";
       return "grab";
     }
 
@@ -743,10 +763,10 @@ export const ResizableLayerDemo: React.FC = () => {
           return getDirectionalRotateCursor(handle);
         } else if (zoneType === "resize") {
           // Use standard resize cursors for resize zones
-          if (handle === "nw") return "nw-resize";
-          if (handle === "ne") return "ne-resize";
-          if (handle === "se") return "se-resize";
-          if (handle === "sw") return "sw-resize";
+          if (handle === "nw" || handle == "se") return "nesw-resize"; // Top-left should be nwse-resize
+          if (handle === "ne" || handle == "sw") return "nwse-resize"; // Top-right should be nesw-resize
+          if (handle === "n" || handle === "s") return "ns-resize";
+          if (handle === "e" || handle === "w") return "ew-resize";
           if (handle === "n" || handle === "s") return "ns-resize";
           if (handle === "e" || handle === "w") return "ew-resize";
         }
@@ -756,8 +776,14 @@ export const ResizableLayerDemo: React.FC = () => {
       if (handle === "rotate") return "crosshair";
     }
 
+    // Check if hovering inside a selected layer (not in resize/rotate zones)
+    // If so, show move cursor
+    if (isHoveringInsideLayer) {
+      return "move";
+    }
+
     return "grab";
-  }, [dragging, hoveredHandle, layers]);
+  }, [dragging, hoveredHandle, layers, isHoveringInsideLayer]);
 
   // console.log(layers);
   const polygonData = useMemo(() => {
