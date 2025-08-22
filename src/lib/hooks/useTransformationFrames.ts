@@ -22,9 +22,9 @@ import {
 
 // Default configuration
 const DEFAULT_CONFIG: Required<TransformationConfig> = {
-  resizeZoneDistance: 12,
-  rotateZoneDistance: 24,
-  handleSize: 8,
+  resizeZoneDistance: 6,
+  rotateZoneDistance: 16,
+  handleSize: 6,
   borderWidth: 2,
   enableResize: true,
   enableRotate: true,

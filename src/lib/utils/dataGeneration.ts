@@ -18,9 +18,9 @@ export function generateResizeZoneData(
 
   objects.forEach((obj) => {
     if (obj.selected) {
-      // Calculate buffer in world coordinates
-      const scale = Math.pow(2, viewState.zoom - 8) * 400;
-      const bufferWorld = resizeDistance / scale;
+      // Calculate buffer in world coordinates using proper DeckGL scaling
+      const pixelsPerCommonUnit = Math.pow(2, viewState.zoom);
+      const bufferWorld = resizeDistance / pixelsPerCommonUnit;
 
       // Create extended object dimensions for resize zone
       const extendedObj = {
@@ -78,9 +78,9 @@ export function generateRotateZoneData(
 
   objects.forEach((obj) => {
     if (obj.selected) {
-      // Calculate buffer in world coordinates for rotate zone
-      const scale = Math.pow(2, viewState.zoom - 8) * 400;
-      const bufferWorld = rotateDistance / scale;
+      // Calculate buffer in world coordinates using proper DeckGL scaling
+      const pixelsPerCommonUnit = Math.pow(2, viewState.zoom);
+      const bufferWorld = rotateDistance / pixelsPerCommonUnit;
 
       // Create extended object dimensions for rotate zone
       const extendedObj = {
@@ -133,10 +133,13 @@ export function generateBorderData(
 ): BorderData[] {
   if (!canvasElement) return [];
   
-  const borderWidthPx = config.borderWidth || 2; // Now in pixels, not world units
-  // Calculate border width in world coordinates based on zoom
-  const scale = Math.pow(2, viewState.zoom - 8) * 400;
-  const borderWidth = borderWidthPx / scale;
+  const borderWidthPx = config.borderWidth || 2; // Desired pixel width
+  
+  // Calculate proper scaling based on DeckGL's coordinate system
+  // At any zoom level: 1 common unit = 2^zoom pixels
+  // So: 1 pixel = 1 / (2^zoom) common units
+  const pixelsPerCommonUnit = Math.pow(2, viewState.zoom);
+  const borderWidth = borderWidthPx / pixelsPerCommonUnit;
   const data: BorderData[] = [];
 
   objects.forEach((obj) => {
@@ -186,11 +189,11 @@ export function generateHandleData(
   const handleSizePx = config.handleSize || 4; // 4px for the 4x4 square
   const handleColor = config.handleColor || [70, 130, 255];
   
-  // Calculate zoom-independent size in world coordinates
+  // Calculate zoom-independent size in world coordinates using proper DeckGL scaling
   let worldSize = 0.002; // Default fallback
   if (viewState && canvasElement) {
-    const scale = Math.pow(2, viewState.zoom - 8) * 400;
-    worldSize = (handleSizePx / 2) / scale; // Half size since we use ±size for squares
+    const pixelsPerCommonUnit = Math.pow(2, viewState.zoom);
+    worldSize = (handleSizePx / 2) / pixelsPerCommonUnit; // Half size since we use ±size for squares
   }
   
   const handles: HandleData[] = [];

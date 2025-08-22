@@ -27,10 +27,20 @@ export function worldToScreen(
   const centerX = rect.width / 2;
   const centerY = rect.height / 2;
 
-  // Simple linear projection that matches DeckGL at zoom level 8
-  const scale = Math.pow(2, viewState.zoom - 8) * 400;
-  const x = centerX + (worldPos[0] - viewState.longitude) * scale;
-  const y = centerY - (worldPos[1] - viewState.latitude) * scale;
+  // Web Mercator projection scale calculation
+  // At zoom level z, there are 2^z tiles across the world (256px each)
+  // World width = 2^z * 256 pixels  
+  const tilesAtZoom = Math.pow(2, viewState.zoom);
+  const worldWidthPixels = tilesAtZoom * 256;
+  
+  // Convert longitude/latitude degrees to pixel coordinates
+  // Longitude: -180° to +180° maps to full world width
+  // Latitude: approximated as linear for small areas (should use Mercator for accuracy)
+  const pixelsPerLngDegree = worldWidthPixels / 360;
+  const pixelsPerLatDegree = worldWidthPixels / 360; // Approximation - true Mercator would be more complex
+  
+  const x = centerX + (worldPos[0] - viewState.longitude) * pixelsPerLngDegree;
+  const y = centerY - (worldPos[1] - viewState.latitude) * pixelsPerLatDegree;
 
   return { x, y };
 }
