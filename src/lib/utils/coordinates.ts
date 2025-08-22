@@ -1,4 +1,4 @@
-import type { LayerObject } from "../types/layer";
+import type { TransformableObject } from "../types";
 
 export interface ViewState {
   longitude: number;
@@ -39,13 +39,13 @@ export function worldToScreen(
  * Check if a point is inside a rotated rectangle
  */
 export function isPointInsideLayer(
-  layer: LayerObject,
+  layer: TransformableObject,
   worldX: number,
   worldY: number
 ): boolean {
   const centerX = layer.x + layer.width / 2;
   const centerY = layer.y + layer.height / 2;
-  const rad = -(layer.rotation * Math.PI) / 180; // Negative for inverse rotation
+  const rad = -((layer.rotation || 0) * Math.PI) / 180; // Negative for inverse rotation
 
   // Rotate the point back to local coordinates
   const dx = worldX - centerX;
@@ -65,10 +65,10 @@ export function isPointInsideLayer(
 /**
  * Get the rotated polygon coordinates for a layer
  */
-export function getRotatedPolygon(layer: LayerObject): Array<[number, number]> {
+export function getRotatedPolygon(layer: TransformableObject): Array<[number, number]> {
   const centerX = layer.x + layer.width / 2;
   const centerY = layer.y + layer.height / 2;
-  const rad = (layer.rotation * Math.PI) / 180;
+  const rad = ((layer.rotation || 0) * Math.PI) / 180;
 
   const corners: Array<[number, number]> = [
     [layer.x, layer.y],

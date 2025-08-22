@@ -316,16 +316,40 @@ src/lib/
 │   ├── coordinates.ts               # Coordinate utilities
 │   └── ...
 ├── types/index.ts                   # TypeScript definitions
-└── index.ts                         # Main exports
+├── index.ts                         # Main exports
+└── README.md                        # This documentation
 ```
 
+## Exports
+
 The library exports everything you need:
-- `useTransformationFrames` - Main hook
-- `createTransformationPolygonLayers` - Layer factory
-- `getRotatedPolygon` - Polygon rotation utility
-- `createBitmapRotationMatrix` - Image rotation utility
-- All TypeScript types
+
+```tsx
+import { 
+  // Main hook
+  useTransformationFrames,
+  
+  // Layer utilities  
+  createTransformationPolygonLayers,
+  
+  // Transformation utilities
+  getRotatedPolygon,
+  createBitmapRotationMatrix,
+  
+  // Types
+  type TransformableObject,
+  type ViewState,
+  type TransformationConfig,
+  type UseTransformationFramesReturn,
+} from './lib';
+```
 
 ## Demo
 
-See `/src/components/HookBasedDemo.tsx` for a complete working example with polygons, images, selection management, and all transformation features.
+See the complete working demo in the parent directory at `/src/components/HookBasedDemo.tsx` for examples with:
+- Polygon layers with rotation support
+- BitmapLayer with matrix-based image rotation
+- Selection management and z-index handling
+- Custom object types and properties
+- Debug mode for development
+- All transformation features integrated
