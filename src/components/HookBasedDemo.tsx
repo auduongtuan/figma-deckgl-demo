@@ -224,7 +224,7 @@ export const HookBasedDemo: React.FC = () => {
 
   return (
     <div className="resizable-layer-demo">
-      <div className="page-title">DeckGL Transform Controls</div>
+      <div className="page-title">DeckGL Transformation Layer</div>
       
       <div
         ref={setCanvasRef}
