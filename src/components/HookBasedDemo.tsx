@@ -224,9 +224,11 @@ export const HookBasedDemo: React.FC = () => {
 
   return (
     <div className="resizable-layer-demo">
+      <div className="page-title">DeckGL Transform Controls</div>
+      
       <div
         ref={setCanvasRef}
-        style={{ position: "relative", width: "100%", height: "100%" }}
+        className="canvas-container"
       >
         <DeckGL
           initialViewState={INITIAL_VIEW_STATE}
@@ -286,62 +288,51 @@ export const HookBasedDemo: React.FC = () => {
           <div
             style={{
               position: "absolute",
-              top: "10px",
+              top: "16px",
               left: "50%",
               transform: "translateX(-50%)",
-              background: "rgba(0, 0, 0, 0.8)",
+              background: "rgba(0, 0, 0, 0.85)",
+              backdropFilter: "blur(12px)",
               color: "white",
-              padding: "4px 8px",
-              borderRadius: "4px",
-              fontSize: "12px",
+              padding: "8px 12px",
+              borderRadius: "8px",
+              fontSize: "13px",
+              fontWeight: "500",
               pointerEvents: "none",
               zIndex: 20,
+              border: "1px solid rgba(255, 255, 255, 0.1)",
+              boxShadow: "0 4px 16px rgba(0, 0, 0, 0.2)",
             }}
           >
             {Math.round(
               objects.find((obj) => obj.id === transformation.dragging?.layerId)
                 ?.rotation || 0
-            )}
-            °
+            )}°
           </div>
         )}
       </div>
 
       {/* Controls */}
-      <div className="controls">
-        <h3>Hook-Based Integration</h3>
-        <div style={{ marginBottom: "15px" }}>
+      <div className="controls">        
+        {/* Debug Toggle */}
+        <div className="debug-toggle-container">
+          <span className="debug-toggle-label">Debug Zones</span>
           <button
+            className={`toggle-switch ${showDebugZones ? 'active' : ''}`}
             onClick={() => setShowDebugZones(!showDebugZones)}
-            style={{
-              padding: "8px 12px",
-              backgroundColor: showDebugZones ? "#4CAF50" : "#f44336",
-              color: "white",
-              border: "none",
-              borderRadius: "4px",
-              cursor: "pointer",
-              fontSize: "12px",
-              marginBottom: "10px",
-            }}
-          >
-            Debug Zones: {showDebugZones ? "ON" : "OFF"}
-          </button>
+          />
         </div>
 
-        <div style={{ marginBottom: "15px", fontSize: "12px", color: "#666" }}>
-          <div>• Full DeckGL control</div>
-          <div>• Add to existing apps</div>
-          <div>• Custom layer ordering</div>
+        {/* Info Section */}
+        <div className="info-section">
+          <div>• Move, resize & rotate objects</div>
+          <div>• Rotation-aware interactions</div>
           <div>• 🔸 = Polygons | 📷 = Images</div>
           {showDebugZones && (
-            <>
-              <div style={{ color: "#0f0", fontStyle: "italic" }}>
-                • Green zones = resize areas
-              </div>
-              <div style={{ color: "#00f", fontStyle: "italic" }}>
-                • Blue zones = rotate areas
-              </div>
-            </>
+            <div className="debug-info">
+              <div style={{ color: "#10b981" }}>• Green zones = resize areas</div>
+              <div style={{ color: "#3b82f6" }}>• Blue zones = rotate areas</div>
+            </div>
           )}
         </div>
 
@@ -363,8 +354,11 @@ export const HookBasedDemo: React.FC = () => {
                   }))
                 );
               }}
-              style={{ backgroundColor: `rgb(${layer.color.join(",")})` }}
             >
+              <div 
+                className="layer-color-indicator"
+                style={{ backgroundColor: `rgb(${layer.color.join(",")})` }}
+              />
               <div className="layer-info">
                 <span>
                   Layer {layer.id} {layer.type === "image" ? "📷" : "🔸"}
