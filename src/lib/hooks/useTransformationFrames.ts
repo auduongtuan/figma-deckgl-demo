@@ -19,6 +19,60 @@ import {
   generateRotateZoneData,
   generateHandleData,
 } from "../utils/dataGeneration";
+import { Vec, getScaleOrigin } from "../utils/rotationAware";
+
+// Get the scale origin point (the point that should stay fixed during resize)
+function getScaleOriginPoint(handle: string, bounds: { x: number; y: number; width: number; height: number }): Vec {
+  const { x, y, width, height } = bounds;
+  
+  switch (handle) {
+    case 'nw': return new Vec(x + width, y + height);  // bottom-right stays fixed
+    case 'ne': return new Vec(x, y + height);          // bottom-left stays fixed  
+    case 'sw': return new Vec(x + width, y);           // top-right stays fixed
+    case 'se': return new Vec(x, y);                   // top-left stays fixed
+    case 'n': return new Vec(x + width / 2, y + height);  // bottom edge stays fixed
+    case 's': return new Vec(x + width / 2, y);           // top edge stays fixed
+    case 'w': return new Vec(x + width, y + height / 2);  // right edge stays fixed
+    case 'e': return new Vec(x, y + height / 2);          // left edge stays fixed
+    default: return new Vec(x + width / 2, y + height / 2); // center
+  }
+}
+
+// Apply scale to object bounds while keeping scale origin fixed
+function applyScaleToObject(
+  bounds: { x: number; y: number; width: number; height: number },
+  scaleX: number,
+  scaleY: number,
+  scaleOrigin: Vec,
+  rotation: number
+): { x: number; y: number; width: number; height: number } {
+  // Calculate new dimensions
+  const newWidth = bounds.width * Math.abs(scaleX);
+  const newHeight = bounds.height * Math.abs(scaleY);
+  
+  // Calculate new center position
+  const oldCenter = new Vec(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+  
+  // Calculate the vector from scale origin to old center in object's local space
+  const centerOffset = Vec.sub(oldCenter, scaleOrigin).rot(-rotation);
+  
+  // Scale this offset
+  const scaledOffset = new Vec(centerOffset.x * scaleX, centerOffset.y * scaleY);
+  
+  // Rotate back and add to scale origin to get new center
+  const newCenter = Vec.add(scaleOrigin, scaledOffset.rot(rotation));
+  
+  // Calculate new top-left position
+  const newX = newCenter.x - newWidth / 2;
+  const newY = newCenter.y - newHeight / 2;
+  
+  return {
+    x: newX,
+    y: newY, 
+    width: newWidth,
+    height: newHeight,
+  };
+}
 
 // Default configuration
 const DEFAULT_CONFIG: Required<TransformationConfig> = {
@@ -268,62 +322,75 @@ export function useTransformationFrames({
 
         if (!orig) return;
 
-        const newLayer = { ...targetObject };
+        const rotation = targetObject.rotation || 0;
 
-        // Apply resize logic based on handle
-        if (handle === "s") {
-          newLayer.y = orig.y;
-          newLayer.height = Math.abs(currentY - orig.y);
-        } else if (handle === "n") {
-          const originalBottom = orig.y + orig.height;
-          newLayer.y = currentY;
-          newLayer.height = Math.abs(originalBottom - currentY);
-        } else if (handle === "w") {
-          const originalRight = orig.x + orig.width;
-          newLayer.width = Math.abs(originalRight - currentX);
-          newLayer.x = Math.min(currentX, originalRight);
-        } else if (handle === "e") {
-          newLayer.x = orig.x;
-          newLayer.width = Math.abs(currentX - orig.x);
-        } else {
-          // Corner handles
-          if (handle.includes("n")) {
-            newLayer.y = currentY;
-            newLayer.height = Math.abs(orig.y + orig.height - currentY);
-          } else if (handle.includes("s")) {
-            newLayer.y = orig.y;
-            newLayer.height = Math.abs(currentY - orig.y);
-          }
-
-          if (handle.includes("w")) {
-            const originalRight = orig.x + orig.width;
-            newLayer.width = Math.abs(originalRight - currentX);
-            newLayer.x = Math.min(currentX, originalRight);
-          } else if (handle.includes("e")) {
-            newLayer.x = orig.x;
-            newLayer.width = Math.abs(currentX - orig.x);
+        // Follow tldraw's approach exactly
+        const rotationRad = rotation * (Math.PI / 180);
+        
+        // Get the scale origin point (opposite corner/edge that stays fixed)
+        const scaleOriginLocal = getScaleOriginPoint(handle, orig);
+        
+        // Get the object center
+        const objectCenter = new Vec(orig.x + orig.width / 2, orig.y + orig.height / 2);
+        
+        // Rotate the scale origin around the object center to get world coordinates
+        const scaleOriginWorld = Vec.rotWith(scaleOriginLocal, objectCenter, rotationRad);
+        
+        // Get current and start points
+        const currentPoint = new Vec(currentX, currentY);
+        const startPoint = new Vec(dragging.startX, dragging.startY);
+        
+        // Calculate distances from scale origin, rotated to object's local space
+        const currentDistance = Vec.sub(currentPoint, scaleOriginWorld).rot(-rotationRad);
+        const startDistance = Vec.sub(startPoint, scaleOriginWorld).rot(-rotationRad);
+        
+        // Calculate scale factors
+        let scaleX = startDistance.x !== 0 ? currentDistance.x / startDistance.x : 1;
+        let scaleY = startDistance.y !== 0 ? currentDistance.y / startDistance.y : 1;
+        
+        // Handle edge cases
+        if (!Number.isFinite(scaleX)) scaleX = 1;
+        if (!Number.isFinite(scaleY)) scaleY = 1;
+        
+        // Lock axes for edge handles
+        const isXLocked = handle === 'n' || handle === 's';
+        const isYLocked = handle === 'w' || handle === 'e';
+        
+        if (isXLocked) scaleX = 1;
+        if (isYLocked) scaleY = 1;
+        
+        // Aspect ratio constraint
+        if (keyPressed.shift) {
+          if (isYLocked) {
+            scaleY = Math.abs(scaleX);
+          } else if (isXLocked) {
+            scaleX = Math.abs(scaleY);
+          } else if (Math.abs(scaleX) > Math.abs(scaleY)) {
+            scaleY = Math.abs(scaleX) * (scaleY < 0 ? -1 : 1);
+          } else {
+            scaleX = Math.abs(scaleY) * (scaleX < 0 ? -1 : 1);
           }
         }
-
-        // Maintain aspect ratio when shift is pressed
-        if (keyPressed.shift && dragging.originalAspectRatio) {
-          const aspectRatio = dragging.originalAspectRatio;
-          if (handle.includes("w") || handle.includes("e")) {
-            newLayer.height = newLayer.width / aspectRatio;
-          } else if (handle.includes("n") || handle.includes("s")) {
-            newLayer.width = newLayer.height * aspectRatio;
-          }
-        }
-
+        
         // Apply constraints
-        newLayer.width = Math.max(config.minWidth, Math.abs(newLayer.width));
-        newLayer.height = Math.max(config.minHeight, newLayer.height);
-
+        const minScaleX = config.minWidth / orig.width;
+        const minScaleY = config.minHeight / orig.height;
+        
+        if (Math.abs(scaleX) < minScaleX) {
+          scaleX = minScaleX * (scaleX < 0 ? -1 : 1);
+        }
+        if (Math.abs(scaleY) < minScaleY) {
+          scaleY = minScaleY * (scaleY < 0 ? -1 : 1);
+        }
+        
+        // Now apply the scale to get new bounds
+        const newBounds = applyScaleToObject(orig, scaleX, scaleY, scaleOriginWorld, rotationRad);
+        
         changes = {
-          x: newLayer.x,
-          y: newLayer.y,
-          width: newLayer.width,
-          height: newLayer.height,
+          x: newBounds.x,
+          y: newBounds.y,
+          width: newBounds.width,
+          height: newBounds.height,
         };
       }
 

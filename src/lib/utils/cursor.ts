@@ -1,4 +1,5 @@
 import type { TransformationState, HoveredHandle, TransformableObject, TransformationConfig } from "../types";
+import { getRotationAwareCursor } from "./rotationAware";
 
 // ===== CURSOR UTILITIES (merged from cursor.ts) =====
 
@@ -99,15 +100,16 @@ export function getCursor(
   isHoveringInsideLayer: boolean,
   config: Partial<TransformationConfig> = {}
 ): string {
+  // Get the object's rotation for cursor calculation
+  const getObjectRotation = (layerId: string): number => {
+    const obj = objects.find(o => o.id === layerId);
+    return obj?.rotation || 0;
+  };
+
   if (dragging) {
-    if (dragging.type === "resize" && dragging.handle) {
-      const handle = dragging.handle;
-      if (handle === "nw") return "nesw-resize"; // Top-left
-      if (handle === "ne") return "nwse-resize"; // Top-right
-      if (handle === "sw") return "nwse-resize"; // Bottom-left
-      if (handle === "se") return "nesw-resize"; // Bottom-right
-      if (handle === "n" || handle === "s") return "ns-resize";
-      if (handle === "e" || handle === "w") return "ew-resize";
+    if (dragging.type === "resize" && dragging.handle && dragging.layerId) {
+      const rotation = getObjectRotation(dragging.layerId);
+      return getRotationAwareCursor(dragging.handle, rotation);
     }
     if (dragging.type === "rotate" && dragging.handle) {
       // Use directional rotate cursor during drag
@@ -129,6 +131,7 @@ export function getCursor(
   // Only show cursor hints when hovering over a selected layer
   if (hoveredHandle && objects.some((obj) => obj.selected)) {
     const handle = hoveredHandle.handleType;
+    const rotation = getObjectRotation(hoveredHandle.layerId);
 
     // Check if we have zoneType information to determine cursor type
     if (hoveredHandle.zoneType) {
@@ -144,13 +147,8 @@ export function getCursor(
         // Use directional rotate cursor for corner rotate zones
         return getDirectionalRotateCursor(handle);
       } else if (zoneType === "resize") {
-        // Use standard resize cursors for resize zones
-        if (handle === "nw") return "nesw-resize"; // Top-left
-        if (handle === "ne") return "nwse-resize"; // Top-right
-        if (handle === "sw") return "nwse-resize"; // Bottom-left
-        if (handle === "se") return "nesw-resize"; // Bottom-right
-        if (handle === "n" || handle === "s") return "ns-resize";
-        if (handle === "e" || handle === "w") return "ew-resize";
+        // Use rotation-aware resize cursors for resize zones
+        return getRotationAwareCursor(handle, rotation);
       }
     }
 
