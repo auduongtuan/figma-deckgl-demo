@@ -152,73 +152,19 @@ export function mapHandleToTldrawStyle(handle: string): string {
 
 // Get rotation-aware cursor for resize handles
 export function getRotationAwareCursor(handle: string, rotation: number = 0): string {
-  // For now, let's use a simpler approach that actually works
-  // We'll rotate the cursor based on the object's rotation
+  // Simple approach: just use standard cursors like the rotate handles do
+  // The browser's standard resize cursors should work fine
   
-  const baseCursors: Record<string, string> = {
+  const cursors: Record<string, string> = {
     'n': 'ns-resize',
     's': 'ns-resize', 
     'e': 'ew-resize',
     'w': 'ew-resize',
-    'nw': 'nw-resize',
-    'ne': 'ne-resize', 
-    'sw': 'sw-resize',
-    'se': 'se-resize',
+    'nw': 'sw-resize',  // top-left gets bottom-left cursor
+    'ne': 'se-resize',  // top-right gets bottom-right cursor
+    'sw': 'nw-resize',  // bottom-left gets top-left cursor
+    'se': 'ne-resize',  // bottom-right gets top-right cursor
   };
 
-  // If no rotation or very small rotation, use base cursors
-  if (Math.abs(rotation) < 10) {
-    return baseCursors[handle] || 'default';
-  }
-
-  // For 90 degree rotations, swap the cursors
-  const normalizedRotation = ((rotation % 360) + 360) % 360;
-  
-  if (normalizedRotation >= 80 && normalizedRotation <= 100) {
-    // 90 degrees - swap horizontal/vertical
-    const rotated90: Record<string, string> = {
-      'n': 'ew-resize',
-      's': 'ew-resize',
-      'e': 'ns-resize', 
-      'w': 'ns-resize',
-      'nw': 'ne-resize',
-      'ne': 'se-resize',
-      'sw': 'nw-resize',
-      'se': 'sw-resize',
-    };
-    return rotated90[handle] || 'default';
-  }
-  
-  if (normalizedRotation >= 170 && normalizedRotation <= 190) {
-    // 180 degrees - reverse directions
-    const rotated180: Record<string, string> = {
-      'n': 'ns-resize',
-      's': 'ns-resize',
-      'e': 'ew-resize',
-      'w': 'ew-resize', 
-      'nw': 'se-resize',
-      'ne': 'sw-resize',
-      'sw': 'ne-resize',
-      'se': 'nw-resize',
-    };
-    return rotated180[handle] || 'default';
-  }
-  
-  if (normalizedRotation >= 260 && normalizedRotation <= 280) {
-    // 270 degrees  
-    const rotated270: Record<string, string> = {
-      'n': 'ew-resize',
-      's': 'ew-resize',
-      'e': 'ns-resize',
-      'w': 'ns-resize',
-      'nw': 'sw-resize', 
-      'ne': 'nw-resize',
-      'sw': 'se-resize',
-      'se': 'ne-resize',
-    };
-    return rotated270[handle] || 'default';
-  }
-
-  // For other angles, use base cursors as fallback
-  return baseCursors[handle] || 'default';
+  return cursors[handle] || 'default';
 }
