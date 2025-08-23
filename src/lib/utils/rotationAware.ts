@@ -151,7 +151,7 @@ export function mapHandleToTldrawStyle(handle: string): string {
 }
 
 // Get rotation-aware cursor for resize handles
-export function getRotationAwareCursor(handle: string, rotation: number = 0): string {
+export function getRotationAwareCursor(handle: string, _rotation: number = 0): string {
   // Simple approach: just use standard cursors like the rotate handles do
   // The browser's standard resize cursors should work fine
   

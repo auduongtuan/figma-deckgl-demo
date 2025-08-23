@@ -19,60 +19,7 @@ import {
   generateRotateZoneData,
   generateHandleData,
 } from "../utils/dataGeneration";
-import { Vec, getScaleOrigin } from "../utils/rotationAware";
-
-// Get the scale origin point (the point that should stay fixed during resize)
-function getScaleOriginPoint(handle: string, bounds: { x: number; y: number; width: number; height: number }): Vec {
-  const { x, y, width, height } = bounds;
-  
-  switch (handle) {
-    case 'nw': return new Vec(x + width, y + height);  // bottom-right stays fixed
-    case 'ne': return new Vec(x, y + height);          // bottom-left stays fixed  
-    case 'sw': return new Vec(x + width, y);           // top-right stays fixed
-    case 'se': return new Vec(x, y);                   // top-left stays fixed
-    case 'n': return new Vec(x + width / 2, y + height);  // bottom edge stays fixed
-    case 's': return new Vec(x + width / 2, y);           // top edge stays fixed
-    case 'w': return new Vec(x + width, y + height / 2);  // right edge stays fixed
-    case 'e': return new Vec(x, y + height / 2);          // left edge stays fixed
-    default: return new Vec(x + width / 2, y + height / 2); // center
-  }
-}
-
-// Apply scale to object bounds while keeping scale origin fixed
-function applyScaleToObject(
-  bounds: { x: number; y: number; width: number; height: number },
-  scaleX: number,
-  scaleY: number,
-  scaleOrigin: Vec,
-  rotation: number
-): { x: number; y: number; width: number; height: number } {
-  // Calculate new dimensions
-  const newWidth = bounds.width * Math.abs(scaleX);
-  const newHeight = bounds.height * Math.abs(scaleY);
-  
-  // Calculate new center position
-  const oldCenter = new Vec(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
-  
-  // Calculate the vector from scale origin to old center in object's local space
-  const centerOffset = Vec.sub(oldCenter, scaleOrigin).rot(-rotation);
-  
-  // Scale this offset
-  const scaledOffset = new Vec(centerOffset.x * scaleX, centerOffset.y * scaleY);
-  
-  // Rotate back and add to scale origin to get new center
-  const newCenter = Vec.add(scaleOrigin, scaledOffset.rot(rotation));
-  
-  // Calculate new top-left position
-  const newX = newCenter.x - newWidth / 2;
-  const newY = newCenter.y - newHeight / 2;
-  
-  return {
-    x: newX,
-    y: newY, 
-    width: newWidth,
-    height: newHeight,
-  };
-}
+import { Vec } from "../utils/rotationAware";
 
 // Default configuration
 const DEFAULT_CONFIG: Required<TransformationConfig> = {
@@ -87,6 +34,7 @@ const DEFAULT_CONFIG: Required<TransformationConfig> = {
   snapRotation: 15,
   minWidth: 0.01,
   minHeight: 0.01,
+  invertedYCoordinates: true,
   debugMode: false,
   theme: "light",
   borderColor: [24, 144, 255],
@@ -98,6 +46,7 @@ const DEFAULT_CONFIG: Required<TransformationConfig> = {
   onTransformEnd: () => {},
   onSelectionChange: () => {},
 };
+
 
 export interface UseTransformationFramesProps {
   objects: TransformableObject[];
@@ -487,6 +436,7 @@ export function useTransformationFrames({
   }, [dragging, hoveredHandle, objects, isHoveringInsideLayer, config]);
 
   const generateLayers = useCallback(() => {
+    
     return {
       borders: generateBorderData(objects, viewState, canvasElement, config),
       resizeZones: generateResizeZoneData(
@@ -516,5 +466,57 @@ export function useTransformationFrames({
     hoveredHandle,
     generateLayers,
     config,
+  };
+}
+
+// Helper functions for tldraw-style resize
+function getScaleOriginPoint(handle: string, bounds: { x: number; y: number; width: number; height: number }): Vec {
+  const { x, y, width, height } = bounds;
+  
+  switch (handle) {
+    case 'nw': return new Vec(x + width, y + height);  // opposite corner
+    case 'ne': return new Vec(x, y + height);
+    case 'sw': return new Vec(x + width, y);
+    case 'se': return new Vec(x, y);
+    case 'n': return new Vec(x + width / 2, y + height);  // opposite edge
+    case 's': return new Vec(x + width / 2, y);
+    case 'w': return new Vec(x + width, y + height / 2);
+    case 'e': return new Vec(x, y + height / 2);
+    default: return new Vec(x + width / 2, y + height / 2);  // center
+  }
+}
+
+function applyScaleToObject(
+  bounds: { x: number; y: number; width: number; height: number },
+  scaleX: number,
+  scaleY: number,
+  scaleOriginWorld: Vec,
+  rotationRad: number
+): { x: number; y: number; width: number; height: number } {
+  // Calculate new dimensions
+  const newWidth = bounds.width * Math.abs(scaleX);
+  const newHeight = bounds.height * Math.abs(scaleY);
+  
+  // Calculate new center position using the working demo's approach
+  const oldCenter = new Vec(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+  
+  // Calculate the vector from scale origin to old center in object's local space
+  const centerOffset = Vec.sub(oldCenter, scaleOriginWorld).rot(-rotationRad);
+  
+  // Scale this offset
+  const scaledOffset = new Vec(centerOffset.x * scaleX, centerOffset.y * scaleY);
+  
+  // Rotate back and add to scale origin to get new center
+  const newCenter = Vec.add(scaleOriginWorld, scaledOffset.rot(rotationRad));
+  
+  // Calculate new top-left position
+  const newX = newCenter.x - newWidth / 2;
+  const newY = newCenter.y - newHeight / 2;
+  
+  return {
+    x: newX,
+    y: newY,
+    width: newWidth,
+    height: newHeight
   };
 }

@@ -30,6 +30,9 @@ export interface TransformationConfig {
   minWidth?: number;              // Default: 0.01
   minHeight?: number;             // Default: 0.01
   
+  // Coordinate system settings
+  invertedYCoordinates?: boolean; // Default: false - set to true for DeckGL with certain projections
+  
   // Visual settings
   debugMode?: boolean;            // Default: false
   theme?: 'light' | 'dark';       // Default: 'light'

@@ -1,5 +1,6 @@
 import type { TransformationState, HoveredHandle, TransformableObject, TransformationConfig } from "../types";
-import { getRotationAwareCursor } from "./rotationAware";
+
+// Note: Coordinate system configuration is now passed via TransformationConfig.invertedYCoordinates
 
 // ===== CURSOR UTILITIES (merged from cursor.ts) =====
 
@@ -58,16 +59,27 @@ const ROTATION_CURSORS: Record<RotateCursorType, (color?: string) => string> = {
   "swne-rotate": (color = "#000") => getCursorCss(ROTATE_CORNER_SVG, 270, false, color),
 };
 
-const CORNER_TO_ROTATE_CURSOR: Record<string, RotateCursorType> = {
-  nw: "swne-rotate",
-  ne: "senw-rotate",
-  sw: "nwse-rotate",
-  se: "nesw-rotate",
-};
+function getCornerToRotateCursor(invertedY: boolean): Record<string, RotateCursorType> {
+  return invertedY ? {
+    // Inverted Y coordinate system (like DeckGL with certain projections)
+    nw: "swne-rotate",
+    ne: "senw-rotate", 
+    sw: "nwse-rotate",
+    se: "nesw-rotate",
+  } : {
+    // Standard coordinate system
+    nw: "nwse-rotate",
+    ne: "nesw-rotate",
+    sw: "nesw-rotate", 
+    se: "nwse-rotate",
+  };
+}
 
-function getRotateCursor(corner: string, options: CursorOptions = {}): string {
+
+function getRotateCursor(corner: string, invertedY: boolean, options: CursorOptions = {}): string {
   const { color = "#000" } = options;
-  const cursorType = CORNER_TO_ROTATE_CURSOR[corner];
+  const cornerToCursor = getCornerToRotateCursor(invertedY);
+  const cursorType = cornerToCursor[corner];
 
   if (!cursorType) {
     return "crosshair";
@@ -83,12 +95,78 @@ function getThemeAwareCursorColor(): string {
   return "#000";
 }
 
-function getDirectionalRotateCursor(corner: string): string {
+function getDirectionalRotateCursor(corner: string, invertedY: boolean): string {
   const color = getThemeAwareCursorColor();
-  return getRotateCursor(corner, { color });
+  return getRotateCursor(corner, invertedY, { color });
+}
+
+// ===== ROTATION-AWARE CURSOR HELPERS =====
+
+/**
+ * Adjust handle direction based on object rotation
+ * For a 90° rotation: n->e, e->s, s->w, w->n
+ */
+function getRotatedHandle(handle: string, rotation: number): string {
+  // Normalize rotation to 0-360
+  const normalizedRotation = ((rotation % 360) + 360) % 360;
+  
+  // Calculate 90-degree steps
+  const steps = Math.round(normalizedRotation / 90) % 4;
+  
+  if (steps === 0) return handle; // No rotation
+  
+  // Handle mapping for 90-degree rotations
+  const handleMap: Record<string, string[]> = {
+    'n': ['n', 'e', 's', 'w'],    // north rotates to east, south, west
+    'e': ['e', 's', 'w', 'n'],    // east rotates to south, west, north
+    's': ['s', 'w', 'n', 'e'],    // south rotates to west, north, east  
+    'w': ['w', 'n', 'e', 's'],    // west rotates to north, east, south
+    'nw': ['nw', 'ne', 'se', 'sw'], // northwest rotates clockwise
+    'ne': ['ne', 'se', 'sw', 'nw'], // northeast rotates clockwise
+    'se': ['se', 'sw', 'nw', 'ne'], // southeast rotates clockwise
+    'sw': ['sw', 'nw', 'ne', 'se'], // southwest rotates clockwise
+  };
+  
+  return handleMap[handle]?.[steps] || handle;
+}
+
+/**
+ * Get rotation-aware resize cursor
+ */
+function getRotationAwareResizeCursor(handle: string, rotation: number, invertedY: boolean): string {
+  const rotatedHandle = getRotatedHandle(handle, rotation);
+  
+  // Apply cursor mappings based on coordinate system configuration
+  if (invertedY) {
+    // Inverted Y coordinate system (like DeckGL with certain projections)
+    if (rotatedHandle === "nw") return "nesw-resize";
+    if (rotatedHandle === "ne") return "nwse-resize";
+    if (rotatedHandle === "sw") return "nwse-resize";
+    if (rotatedHandle === "se") return "nesw-resize";
+  } else {
+    // Standard coordinate system
+    if (rotatedHandle === "nw") return "nwse-resize";
+    if (rotatedHandle === "ne") return "nesw-resize";
+    if (rotatedHandle === "sw") return "nesw-resize";
+    if (rotatedHandle === "se") return "nwse-resize";
+  }
+  
+  if (rotatedHandle === "n" || rotatedHandle === "s") return "ns-resize";
+  if (rotatedHandle === "e" || rotatedHandle === "w") return "ew-resize";
+  
+  return "default";
+}
+
+/**
+ * Get rotation-aware rotate cursor
+ */
+function getRotationAwareRotateCursor(handle: string, rotation: number, invertedY: boolean): string {
+  const rotatedHandle = getRotatedHandle(handle, rotation);
+  return getDirectionalRotateCursor(rotatedHandle, invertedY);
 }
 
 // ===== MAIN CURSOR LOGIC =====
+
 
 /**
  * Get the appropriate cursor based on current state
@@ -100,19 +178,22 @@ export function getCursor(
   isHoveringInsideLayer: boolean,
   config: Partial<TransformationConfig> = {}
 ): string {
-  // Get the object's rotation for cursor calculation
+  // Helper to find object rotation
   const getObjectRotation = (layerId: string): number => {
     const obj = objects.find(o => o.id === layerId);
     return obj?.rotation || 0;
   };
 
+  const invertedY = config.invertedYCoordinates ?? false;
+
   if (dragging) {
-    if (dragging.type === "resize" && dragging.handle && dragging.layerId) {
-      const rotation = getObjectRotation(dragging.layerId);
-      return getRotationAwareCursor(dragging.handle, rotation);
+    const rotation = getObjectRotation(dragging.layerId);
+    
+    if (dragging.type === "resize" && dragging.handle) {
+      return getRotationAwareResizeCursor(dragging.handle, rotation, invertedY);
     }
     if (dragging.type === "rotate" && dragging.handle) {
-      // Use directional rotate cursor during drag
+      // Use rotation-aware directional rotate cursor during drag
       const handle = dragging.handle;
       if (
         handle === "nw" ||
@@ -120,7 +201,7 @@ export function getCursor(
         handle === "se" ||
         handle === "sw"
       ) {
-        return getDirectionalRotateCursor(handle);
+        return getRotationAwareRotateCursor(handle, rotation, invertedY);
       }
       return "grabbing";
     }
@@ -144,11 +225,11 @@ export function getCursor(
           handle === "se" ||
           handle === "sw")
       ) {
-        // Use directional rotate cursor for corner rotate zones
-        return getDirectionalRotateCursor(handle);
+        // Use rotation-aware directional rotate cursor for corner rotate zones
+        return getRotationAwareRotateCursor(handle, rotation, invertedY);
       } else if (zoneType === "resize") {
-        // Use rotation-aware resize cursors for resize zones
-        return getRotationAwareCursor(handle, rotation);
+        // Use rotation-aware resize cursors for hover
+        return getRotationAwareResizeCursor(handle, rotation, invertedY);
       }
     }
 
